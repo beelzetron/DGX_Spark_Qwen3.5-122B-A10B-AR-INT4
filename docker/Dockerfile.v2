@@ -45,5 +45,14 @@ COPY patches/03-int8-lm-head/patch_int8_lmhead.py /opt/patches/patch_int8_lmhead
 RUN python3 /opt/patches/patch_int8_lmhead.py \
  && grep -q DGX_SPARK_INT8_LMHEAD_V2 /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/logits_processor.py
 
+# Patch 3: Qwen3 reasoning parser (PR #35687 + #40783) for agentic tool calling
+ARG WITH_PR40783=1
+COPY patches/06-pr40783-qwen3-reasoning/ /opt/patches/06-pr40783-qwen3-reasoning/
+RUN if [ "$WITH_PR40783" = "1" ]; then \
+      python3 /opt/patches/06-pr40783-qwen3-reasoning/apply_pr40783_patches.py \
+      && grep -q partial_tag_overlap /usr/local/lib/python3.12/dist-packages/vllm/tool_parsers/utils.py \
+      && grep -q DGX_SPARK_PR40783 /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/chat_completion/serving.py; \
+    fi
+
 ENTRYPOINT ["vllm"]
 CMD ["serve", "--help"]

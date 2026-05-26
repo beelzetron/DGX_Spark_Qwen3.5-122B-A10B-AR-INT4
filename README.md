@@ -230,7 +230,7 @@ This takes 30-60 minutes (compiles PyTorch + FlashInfer + Triton for SM121).
 docker build -t vllm-qwen35-v2 -f docker/Dockerfile.v2 .
 ```
 
-This is a ~1-second thin layer on top of `vllm-sm121:latest` that COPYs `patches/01-hybrid-int4-fp8/inc.py` into the image and runs `patches/03-int8-lm-head/patch_int8_lmhead.py` to text-replace `vllm/model_executor/layers/logits_processor.py` with the INT8 LM Head v2 + autotune kernel. To layer on a different base (e.g. a vanilla `vllm-sm121:latest` you built without PR #38325), pass `--build-arg VLLM_BASE=<image-name>:<tag>`.
+This is a ~1-second thin layer on top of `vllm-sm121:latest` that COPYs `patches/01-hybrid-int4-fp8/inc.py` into the image, runs `patches/03-int8-lm-head/patch_int8_lmhead.py` (INT8 LM Head v2 + autotune), and `patches/06-pr40783-qwen3-reasoning/apply_pr40783_patches.py` (agentic reasoning+tool parser fixes; skip with `./install.sh --no-pr40783`). To layer on a different base (e.g. a vanilla `vllm-sm121:latest` you built without PR #38325), pass `--build-arg VLLM_BASE=<image-name>:<tag>`.
 
 ### Step 5: Launch
 
@@ -330,7 +330,15 @@ Notable flags in this example:
 
 For Qwen3.5-122B (this project), use `--tool-call-parser qwen3_xml`. The example above uses `qwen3_coder` which also works but is designed for Coder-series models.
 
-> **Known issue (vLLM 0.19):** When `--reasoning-parser qwen3` and `--tool-call-parser` are both active, tool calls emitted inside `<think>` blocks may be silently dropped in non-streaming mode ([vllm#39056](https://github.com/vllm-project/vllm/issues/39056)).
+> **Agentic tool calling (fixed in default build since PR #40783 backport):** The v2 image applies [vLLM PR #35687](https://github.com/vllm-project/vllm/pull/35687) + [PR #40783](https://github.com/vllm-project/vllm/pull/40783) via `patches/06-pr40783-qwen3-reasoning/` (default-on; skip with `./install.sh --no-pr40783`). Use:
+>
+> ```bash
+> --reasoning-parser qwen3 \
+> --enable-auto-tool-choice \
+> --tool-call-parser qwen3_xml
+> ```
+>
+> Tool calls still embedded *inside* `<think>` (not after it) may remain broken until [vLLM PR #39055](https://github.com/vllm-project/vllm/pull/39055) lands ([vllm#39056](https://github.com/vllm-project/vllm/issues/39056)).
 
 ### Troubleshooting
 
@@ -774,6 +782,8 @@ We tested 20+ optimization approaches across speculative decoding, quantization,
 │   │   └── add-mtp-weights.py               # Register MTP weights in model index
 │   ├── 03-int8-lm-head/
 │   │   └── patch_int8_lmhead.py             # INT8 LM Head v2 (baked into image at build time)
+│   ├── 05-pr38325-swapab/                   # swapAB FP8 SM120 (baked into vllm-sm121 build)
+│   ├── 06-pr40783-qwen3-reasoning/          # Qwen3 agentic parser backport (baked into Dockerfile.v2)
 │   └── 04-turboquant/                       # Optional: TurboQuant KV cache
 │       ├── generate_tq_metadata.py           # Generate turboquant_kv.json
 │       ├── kv_cache_interface.py            # TQ-aware KV cache interface

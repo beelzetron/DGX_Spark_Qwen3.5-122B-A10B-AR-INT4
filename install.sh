@@ -30,6 +30,9 @@
 #                    if the patch breaks your build, or you want to reuse an
 #                    existing pristine `vllm-sm121:latest` cache without the
 #                    full ~30-60 min NVCC recompile.
+#   --no-pr40783     SKIP the Qwen3 reasoning parser backport (PR #35687+#40783)
+#                    baked into Dockerfile.v2 (~1s thin layer). Default IS on.
+#                    Agentic tool-calling needs it; bench-only can skip.
 #   --launch         After build, automatically launch the container (Step 5).
 #                    Default: prompts interactively. With --launch, no prompt.
 #   --no-launch      Never launch, never prompt. Useful for CI / unattended runs.
@@ -65,11 +68,13 @@ NO_CACHE=0
 WITH_PR38325=1   # default ON since 2026-05-09 — PR #38325 gives ~+0.76% with
                  # zero extra build time on fresh installs (vLLM is rebuilt
                  # for SM121 either way). Set to 0 with --no-pr38325 to skip.
+WITH_PR40783=1   # default ON — Qwen3 agentic reasoning parser (PR #35687+#40783)
 LAUNCH_MODE="prompt"   # prompt | yes | no
 for arg in "$@"; do
     case "$arg" in
         --no-cache)     NO_CACHE=1 ;;
         --no-pr38325)   WITH_PR38325=0 ;;
+        --no-pr40783)   WITH_PR40783=0 ;;
         --launch)       LAUNCH_MODE="yes" ;;
         --no-launch)    LAUNCH_MODE="no" ;;
         -h|--help)
@@ -460,13 +465,14 @@ if docker image inspect vllm-qwen35-v2:latest >/dev/null 2>&1; then
     step_skip "Step 4 — vllm-qwen35-v2:latest already exists (delete with 'docker rmi vllm-qwen35-v2' to rebuild, or pass --no-cache)"
 else
     step_begin "Step 4 — Building vllm-qwen35-v2 (final image)" \
-               "thin layer on top of ${SM121_IMAGE}:latest: copies hybrid INC patch and bakes INT8 LM Head v2 patch (with autotune). ~1 sec."
+               "thin layer on top of ${SM121_IMAGE}:latest: hybrid INC + INT8 LM Head + PR #40783 agentic parser. ~1 sec."
     cd "${PROJECT_DIR}"
     # VLLM_BASE always vllm-sm121:latest in normal install.sh flow. Kept as
     # a build-arg so a manual `docker build` can override when testing
     # alternative base images (e.g., comparison runs against archived tags).
     docker build \
         --build-arg "VLLM_BASE=${SM121_IMAGE}:latest" \
+        --build-arg "WITH_PR40783=${WITH_PR40783}" \
         -t vllm-qwen35-v2 \
         -f docker/Dockerfile.v2 .
     docker image inspect vllm-qwen35-v2:latest >/dev/null 2>&1 \
