@@ -197,32 +197,16 @@ def apply_serving() -> None:
     print(f"OK: patched {path} ({MARKER})")
 
 
-def apply_qwen3xml_partial_tag() -> None:
-    """Minimal PR #40861 slice: withhold partial <tool_call> prefix in XML parser."""
+def revert_qwen3xml_partial_tag() -> None:
+    """Remove minimal #40861 slice; it used the wrong buffer and broke XML parsing.
+
+    Fragmented <tool_call> handling stays in qwen3_reasoning_parser.py only.
+    """
     path = TARGETS["qwen3xml"]
     content = _read(path)
-    if f"{MARKER}_XML" in content:
-        print(f"SKIP: qwen3xml patch already applied in {path}")
+    if f"{MARKER}_XML" not in content:
+        print(f"SKIP: no qwen3xml partial-tag patch to revert in {path}")
         return
-
-    import_anchor = (
-        "from vllm.tool_parsers.abstract_tool_parser import (\n"
-        "    Tool,\n"
-        "    ToolParser,\n"
-        ")\n"
-    )
-    import_replacement = (
-        "from vllm.tool_parsers.abstract_tool_parser import (\n"
-        "    Tool,\n"
-        "    ToolParser,\n"
-        ")\n"
-        "from vllm.tool_parsers.utils import partial_tag_overlap\n"
-    )
-    if "partial_tag_overlap" not in content:
-        if import_anchor not in content:
-            print(f"FAIL: qwen3xml import anchor not found in {path}")
-            sys.exit(1)
-        content = content.replace(import_anchor, import_replacement, 1)
 
     old_emit = """            if self.text_content_buffer and self.tool_call_index == 0:
                 # Has text content but no tool_call yet, output text content
@@ -232,7 +216,8 @@ def apply_qwen3xml_partial_tag() -> None:
                 self.text_content_buffer = ""
                 return text_delta"""
 
-    new_emit = f"""            if self.text_content_buffer and self.tool_call_index == 0:
+    patched_emit_variants = [
+        f"""            if self.text_content_buffer and self.tool_call_index == 0:
                 # {MARKER}_XML: withhold suffix that could be start of <tool_call>
                 overlap = partial_tag_overlap(
                     self.streaming_buffer, self.tool_call_start_token
@@ -250,15 +235,44 @@ def apply_qwen3xml_partial_tag() -> None:
                 text_delta = DeltaMessage(content=self.text_content_buffer)
                 self._emit_delta(text_delta)
                 self.text_content_buffer = ""
-                return text_delta"""
+                return text_delta""",
+        f"""            if self.text_content_buffer and self.tool_call_index == 0:
+                # {MARKER}_XML: withhold suffix that could be start of <tool_call>
+                overlap = partial_tag_overlap(
+                    self.text_content_buffer, self.tool_call_start_token
+                )
+                emit_len = len(self.text_content_buffer) - overlap
+                if emit_len > 0:
+                    text_delta = DeltaMessage(
+                        content=self.text_content_buffer[:emit_len]
+                    )
+                    self.text_content_buffer = self.text_content_buffer[emit_len:]
+                    self._emit_delta(text_delta)
+                    return text_delta
+                if overlap > 0:
+                    return DeltaMessage()
+                text_delta = DeltaMessage(content=self.text_content_buffer)
+                self._emit_delta(text_delta)
+                self.text_content_buffer = ""
+                return text_delta""",
+    ]
 
-    if old_emit not in content:
-        print(f"FAIL: qwen3xml text_content_buffer anchor not found in {path}")
+    reverted = False
+    for patched_emit in patched_emit_variants:
+        if patched_emit in content:
+            content = content.replace(patched_emit, old_emit, 1)
+            reverted = True
+            break
+    if not reverted:
+        print(f"FAIL: {MARKER}_XML marker present but emit block not found in {path}")
         sys.exit(1)
-    content = content.replace(old_emit, new_emit, 1)
+
+    import_extra = "from vllm.tool_parsers.utils import partial_tag_overlap\n"
+    if import_extra in content:
+        content = content.replace(import_extra, "", 1)
 
     _write(path, content)
-    print(f"OK: patched {path} ({MARKER}_XML)")
+    print(f"OK: reverted qwen3xml partial-tag patch in {path}")
 
 
 def main() -> None:
@@ -270,7 +284,7 @@ def main() -> None:
     apply_reasoning_parser()
     apply_partial_tag_overlap()
     apply_serving()
-    apply_qwen3xml_partial_tag()
+    revert_qwen3xml_partial_tag()
     print(f"OK: all {MARKER} patches applied")
 
 
