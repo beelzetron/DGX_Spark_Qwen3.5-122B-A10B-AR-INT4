@@ -79,11 +79,35 @@ def partial_tag_overlap(text: str, tag: str) -> int:
     print(f"OK: added partial_tag_overlap to {path}")
 
 
+def _fix_serving_delta_message_shadow(content: str) -> tuple[str, bool]:
+    """Remove inline DeltaMessage import that shadows module-level binding."""
+    bad = """                                else:
+                                    from vllm.entrypoints.openai.engine.protocol import (
+                                        DeltaMessage,
+                                    )
+
+                                    delta_message = DeltaMessage(
+                                        reasoning=reasoning_from_transition
+                                    )"""
+    good = """                                else:
+                                    delta_message = DeltaMessage(
+                                        reasoning=reasoning_from_transition
+                                    )"""
+    if bad not in content:
+        return content, False
+    return content.replace(bad, good, 1), True
+
+
 def apply_serving() -> None:
     path = TARGETS["serving"]
     content = _read(path)
     if MARKER in content:
-        print(f"SKIP: serving patch already applied in {path}")
+        content, fixed = _fix_serving_delta_message_shadow(content)
+        if fixed:
+            _write(path, content)
+            print(f"OK: fixed DeltaMessage UnboundLocalError in {path}")
+        else:
+            print(f"SKIP: serving patch already applied in {path}")
         return
 
     old_end_check = """                                if reasoning_parser.is_reasoning_end(output_token_ids):
@@ -156,10 +180,6 @@ def apply_serving() -> None:
                                         reasoning_from_transition
                                     )
                                 else:
-                                    from vllm.entrypoints.openai.engine.protocol import (
-                                        DeltaMessage,
-                                    )
-
                                     delta_message = DeltaMessage(
                                         reasoning=reasoning_from_transition
                                     )

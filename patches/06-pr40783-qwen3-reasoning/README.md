@@ -54,6 +54,16 @@ Parser-only Python changes — expect **no measurable tok/s impact** on
 Delete this directory when upgrading to vLLM ≥0.20 where #35687 is merged and
 #40783/#40861 are upstream (or no longer needed).
 
+## Troubleshooting
+
+**`UnboundLocalError: DeltaMessage` in `serving.py`:** An early patch version imported
+`DeltaMessage` inside `chat_completion_stream_generator`, which shadows the module-level
+import. Re-run the apply script (idempotent) or rebuild the image:
+
+```bash
+python3 /opt/patches/06-pr40783-qwen3-reasoning/apply_pr40783_patches.py
+```
+
 ## TODO (post–multi-model review)
 
 Validate on DGX with a real agentic workload before further code changes.

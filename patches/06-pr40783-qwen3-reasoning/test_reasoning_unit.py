@@ -17,6 +17,15 @@ def partial_tag_overlap(text: str, tag: str) -> int:
     return 0
 
 
+def test_apply_script_no_inline_delta_message_import():
+    apply_src = (SCRIPT_DIR / "apply_pr40783_patches.py").read_text()
+    before_repair_helper = apply_src.split("def _fix_serving_delta_message_shadow", 1)[0]
+    assert (
+        "from vllm.entrypoints.openai.engine.protocol import"
+        not in before_repair_helper
+    )
+
+
 def test_shipped_parser_has_key_fixes():
     assert "def count_reasoning_tokens" in PARSER_SRC
     assert "input_ids.index(self._tool_call_token_id)" in PARSER_SRC
@@ -40,6 +49,7 @@ def test_extract_content_ids_logic():
 
 
 def main():
+    test_apply_script_no_inline_delta_message_import()
     test_shipped_parser_has_key_fixes()
     test_partial_tag_overlap()
     test_extract_content_ids_logic()
