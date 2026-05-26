@@ -64,6 +64,10 @@ import. Re-run the apply script (idempotent) or rebuild the image:
 python3 /opt/patches/06-pr40783-qwen3-reasoning/apply_pr40783_patches.py
 ```
 
+**hermes-agent “invalid tool call”:** The serving patch must not attach `reasoning` to
+the same streaming `delta` as `tool_calls`. Re-run `apply_pr40783_patches.py` and
+restart.
+
 **API hangs on tool-calling requests:** An early `DGX_SPARK_QWEN3XML_PARAM_BODY` patch
 could spin forever in the XML parser (empty element at `</parameter>`). Re-run the
 apply script to revert it, then restart the container.

@@ -81,6 +81,32 @@ def partial_tag_overlap(text: str, tag: str) -> int:
     print(f"OK: added partial_tag_overlap to {path}")
 
 
+def _fix_serving_reasoning_on_tool_calls(content: str) -> tuple[str, bool]:
+    """Stop merging reasoning onto tool_calls deltas (breaks hermes-agent streaming)."""
+    old = """                            if reasoning_from_transition:
+                                if delta_message is not None:
+                                    delta_message.reasoning = (
+                                        reasoning_from_transition
+                                    )
+                                else:
+                                    delta_message = DeltaMessage(
+                                        reasoning=reasoning_from_transition
+                                    )"""
+    new = """                            if reasoning_from_transition:
+                                if delta_message is not None:
+                                    if not delta_message.tool_calls:
+                                        delta_message.reasoning = (
+                                            reasoning_from_transition
+                                        )
+                                else:
+                                    delta_message = DeltaMessage(
+                                        reasoning=reasoning_from_transition
+                                    )"""
+    if old not in content:
+        return content, False
+    return content.replace(old, new, 1), True
+
+
 def _fix_serving_delta_message_shadow(content: str) -> tuple[str, bool]:
     """Remove inline DeltaMessage import that shadows module-level binding."""
     bad = """                                else:
@@ -104,10 +130,14 @@ def apply_serving() -> None:
     path = TARGETS["serving"]
     content = _read(path)
     if MARKER in content:
-        content, fixed = _fix_serving_delta_message_shadow(content)
-        if fixed:
+        content, fixed_shadow = _fix_serving_delta_message_shadow(content)
+        content, fixed_reasoning = _fix_serving_reasoning_on_tool_calls(content)
+        if fixed_shadow or fixed_reasoning:
             _write(path, content)
-            print(f"OK: fixed DeltaMessage UnboundLocalError in {path}")
+            if fixed_shadow:
+                print(f"OK: fixed DeltaMessage UnboundLocalError in {path}")
+            if fixed_reasoning:
+                print(f"OK: fixed reasoning-on-tool_calls in {path}")
         else:
             print(f"SKIP: serving patch already applied in {path}")
         return
@@ -161,7 +191,7 @@ def apply_serving() -> None:
                     # when only tool calls
                     elif tool_choice_auto:"""
 
-    new_tool_handoff = f"""                            # {MARKER}: preserve reasoning text from transition delta
+    new_tool_handoff = f"""                            # {MARKER}: transition reasoning — never on tool_calls deltas
                             reasoning_from_transition = (
                                 delta_message.reasoning
                                 if delta_message is not None
@@ -178,9 +208,10 @@ def apply_serving() -> None:
                             )
                             if reasoning_from_transition:
                                 if delta_message is not None:
-                                    delta_message.reasoning = (
-                                        reasoning_from_transition
-                                    )
+                                    if not delta_message.tool_calls:
+                                        delta_message.reasoning = (
+                                            reasoning_from_transition
+                                        )
                                 else:
                                     delta_message = DeltaMessage(
                                         reasoning=reasoning_from_transition
