@@ -64,9 +64,10 @@ import. Re-run the apply script (idempotent) or rebuild the image:
 python3 /opt/patches/06-pr40783-qwen3-reasoning/apply_pr40783_patches.py
 ```
 
-**`not well-formed (invalid token)` in `qwen3xml_tool_parser.py`:** Caused by an early
-minimal #40861 slice (wrong buffer for `partial_tag_overlap`). Re-run the apply script
-to revert it; restart the container afterward.
+**`not well-formed (invalid token)` in `qwen3xml_tool_parser.py`:** v0.19.0 feeds JSON
+parameter bodies through expat and splits on `<` inside values. Re-run the apply script
+(it applies `DGX_SPARK_QWEN3XML_PARAM_BODY` and reverts the old #40861 slice); restart
+the container afterward.
 
 ## TODO (post–multi-model review)
 

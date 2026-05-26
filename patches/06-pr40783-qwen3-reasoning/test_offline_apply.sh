@@ -29,6 +29,7 @@ grep -q partial_tag_overlap "$TMP/vllm/tool_parsers/utils.py"
 grep -q count_reasoning_tokens "$TMP/vllm/reasoning/qwen3_reasoning_parser.py"
 grep -q DGX_SPARK_PR40783 "$TMP/vllm/entrypoints/openai/chat_completion/serving.py"
 ! grep -q DGX_SPARK_PR40783_XML "$TMP/vllm/tool_parsers/qwen3xml_tool_parser.py"
+grep -q DGX_SPARK_QWEN3XML_PARAM_BODY "$TMP/vllm/tool_parsers/qwen3xml_tool_parser.py"
 
 # Idempotent re-run
 python3 "$ROOT/patches/06-pr40783-qwen3-reasoning/apply_pr40783_patches.py"

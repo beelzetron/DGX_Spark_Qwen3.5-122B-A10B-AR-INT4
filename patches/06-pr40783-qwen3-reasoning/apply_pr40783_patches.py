@@ -12,6 +12,7 @@ import shutil
 import sys
 
 MARKER = "DGX_SPARK_PR40783"
+MARKER_PARAM_BODY = "DGX_SPARK_QWEN3XML_PARAM_BODY"
 
 VLLM_PKG = os.environ.get(
     "VLLM_PKG",
@@ -275,6 +276,96 @@ def revert_qwen3xml_partial_tag() -> None:
     print(f"OK: reverted qwen3xml partial-tag patch in {path}")
 
 
+def apply_qwen3xml_param_body_fix() -> None:
+    """Stop feeding JSON parameter bodies (and '<' in values) to expat.
+
+    v0.19.0 _should_skip_element returns False for any text while a tool call is
+    active, so _find_next_complete_element splits on '<' inside JSON and expat
+    logs 'not well-formed (invalid token)'. Route parameter body to _pre_param_buffer.
+    """
+    path = TARGETS["qwen3xml"]
+    content = _read(path)
+    if MARKER_PARAM_BODY in content:
+        print(f"SKIP: qwen3xml param-body fix already applied in {path}")
+        return
+
+    helper_anchor = "    def _should_skip_element(self, element: str) -> bool:"
+    helper_method = f'''    def _is_tool_xml_element(self, element: str) -> bool:
+        """{MARKER_PARAM_BODY}: tag fragment vs parameter JSON/plain body."""
+        if not element:
+            return False
+        stripped = element.lstrip()
+        prefixes = (
+            self.tool_call_start_token,
+            self.tool_call_end_token,
+            self.function_start_token,
+            self.function_end_token,
+            self.parameter_start_token,
+            self.parameter_end_token,
+            "<function=",
+            "<parameter=",
+        )
+        return any(stripped.startswith(p) for p in prefixes)
+
+    def _should_skip_element(self, element: str) -> bool:'''
+    if helper_anchor not in content:
+        print(f"FAIL: _should_skip_element anchor not found in {path}")
+        sys.exit(1)
+    content = content.replace(helper_anchor, helper_method, 1)
+
+    loop_anchor = """            if self._should_skip_element(element):
+                self.last_processed_pos = end_pos
+                continue
+
+            # Found complete XML element, process it"""
+    loop_replacement = f"""            if self._should_skip_element(element):
+                self.last_processed_pos = end_pos
+                continue
+
+            # {MARKER_PARAM_BODY}: parameter JSON must not go through expat
+            if self.current_call_id is not None and not self._is_tool_xml_element(
+                element
+            ):
+                if self._pre_inside_parameter or self.current_param_name:
+                    self._pre_param_buffer += element
+                    found_any = True
+                self.last_processed_pos = end_pos
+                continue
+
+            # Found complete XML element, process it"""
+    if loop_anchor not in content:
+        print(f"FAIL: _process_complete_xml_elements loop anchor not found in {path}")
+        sys.exit(1)
+    content = content.replace(loop_anchor, loop_replacement, 1)
+
+    find_anchor = """        buffer = self.streaming_buffer[start_pos:]
+
+        if not buffer:
+            return None, start_pos
+
+        if buffer.startswith("<"):"""
+    find_replacement = f"""        buffer = self.streaming_buffer[start_pos:]
+
+        if not buffer:
+            return None, start_pos
+
+        # {MARKER_PARAM_BODY}: do not treat '<' inside parameter values as new tags
+        if self._pre_inside_parameter:
+            close_pos = buffer.find(self.parameter_end_token)
+            if close_pos != -1:
+                return buffer[:close_pos], start_pos + close_pos
+            return None, start_pos
+
+        if buffer.startswith("<"):"""
+    if find_anchor not in content:
+        print(f"FAIL: _find_next_complete_element anchor not found in {path}")
+        sys.exit(1)
+    content = content.replace(find_anchor, find_replacement, 1)
+
+    _write(path, content)
+    print(f"OK: patched {path} ({MARKER_PARAM_BODY})")
+
+
 def main() -> None:
     for name, path in TARGETS.items():
         if not os.path.isfile(path):
@@ -285,6 +376,7 @@ def main() -> None:
     apply_partial_tag_overlap()
     apply_serving()
     revert_qwen3xml_partial_tag()
+    apply_qwen3xml_param_body_fix()
     print(f"OK: all {MARKER} patches applied")
 
 
