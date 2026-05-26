@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import urllib.request
 
 MARKER = "DGX_SPARK_PR40783"
 MARKER_PARAM_BODY = "DGX_SPARK_QWEN3XML_PARAM_BODY"
@@ -276,85 +277,25 @@ def revert_qwen3xml_partial_tag() -> None:
     print(f"OK: reverted qwen3xml partial-tag patch in {path}")
 
 
-def revert_qwen3xml_param_body_fix() -> None:
-    """Remove param-body patch — caused infinite loop when buffer starts with </parameter>.
+QWEN3XML_UPSTREAM = (
+    "https://raw.githubusercontent.com/vllm-project/vllm/v0.19.0/"
+    "vllm/tool_parsers/qwen3xml_tool_parser.py"
+)
 
-    Leaves qwen3xml at stock v0.19.0 behavior (XML warnings possible, but no API hang).
-    """
+
+def restore_qwen3xml_if_patched() -> None:
+    """Restore stock v0.19.0 qwen3xml when any experimental patch marker is present."""
     path = TARGETS["qwen3xml"]
     content = _read(path)
-    if MARKER_PARAM_BODY not in content:
-        print(f"SKIP: no qwen3xml param-body patch to revert in {path}")
+    markers = (MARKER_PARAM_BODY, f"{MARKER}_XML", "_is_tool_xml_element")
+    if not any(m in content for m in markers):
+        print(f"SKIP: qwen3xml already stock in {path}")
         return
-
-    loop_block = f"""            # {MARKER_PARAM_BODY}: parameter JSON must not go through expat
-            if self.current_call_id is not None and not self._is_tool_xml_element(
-                element
-            ):
-                if self._pre_inside_parameter or self.current_param_name:
-                    self._pre_param_buffer += element
-                    found_any = True
-                self.last_processed_pos = end_pos
-                continue
-
-            """
-    loop_anchor = """            if self._should_skip_element(element):
-                self.last_processed_pos = end_pos
-                continue
-
-            # Found complete XML element, process it"""
-    if loop_block in content:
-        content = content.replace(loop_block, "", 1)
-    elif loop_block.replace("                continue\n\n", "                continue\n") in content:
-        content = content.replace(
-            loop_block.replace("                continue\n\n", "                continue\n"),
-            "",
-            1,
-        )
-    else:
-        print(f"FAIL: {MARKER_PARAM_BODY} loop block not found in {path}")
-        sys.exit(1)
-
-    find_block = f"""        # {MARKER_PARAM_BODY}: do not treat '<' inside parameter values as new tags
-        if self._pre_inside_parameter:
-            close_pos = buffer.find(self.parameter_end_token)
-            if close_pos != -1:
-                return buffer[:close_pos], start_pos + close_pos
-            return None, start_pos
-
-"""
-    if find_block not in content:
-        print(f"FAIL: {MARKER_PARAM_BODY} find block not found in {path}")
-        sys.exit(1)
-    content = content.replace(find_block, "", 1)
-
-    helper_block = f'''    def _is_tool_xml_element(self, element: str) -> bool:
-        """{MARKER_PARAM_BODY}: tag fragment vs parameter JSON/plain body."""
-        if not element:
-            return False
-        stripped = element.lstrip()
-        prefixes = (
-            self.tool_call_start_token,
-            self.tool_call_end_token,
-            self.function_start_token,
-            self.function_end_token,
-            self.parameter_start_token,
-            self.parameter_end_token,
-            "<function=",
-            "<parameter=",
-        )
-        return any(stripped.startswith(p) for p in prefixes)
-
-    '''
-    helper_anchor = "    def _should_skip_element(self, element: str) -> bool:"
-    if helper_block + helper_anchor in content:
-        content = content.replace(helper_block + helper_anchor, helper_anchor, 1)
-    else:
-        print(f"FAIL: {MARKER_PARAM_BODY} helper not found in {path}")
-        sys.exit(1)
-
-    _write(path, content)
-    print(f"OK: reverted qwen3xml param-body patch in {path}")
+    print(f"OK: restoring stock qwen3xml from {QWEN3XML_UPSTREAM}")
+    with urllib.request.urlopen(QWEN3XML_UPSTREAM, timeout=120) as resp:
+        stock = resp.read().decode()
+    _write(path, stock)
+    print(f"OK: restored stock {path}")
 
 
 def main() -> None:
@@ -366,8 +307,7 @@ def main() -> None:
     apply_reasoning_parser()
     apply_partial_tag_overlap()
     apply_serving()
-    revert_qwen3xml_partial_tag()
-    revert_qwen3xml_param_body_fix()
+    restore_qwen3xml_if_patched()
     print(f"OK: all {MARKER} patches applied")
 
 
