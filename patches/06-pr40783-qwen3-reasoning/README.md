@@ -13,8 +13,8 @@ on the pinned **v0.19.0** DGX Spark stack, without rebuilding `vllm-sm121`.
 - `count_reasoning_tokens` returning 0 for Qwen3.5+ outputs
 - Withheld partial-tag bytes silently dropped when continuation is not a tool call
 
-Does **not** patch `qwen3xml_tool_parser.py` (a minimal #40861 slice caused malformed
-XML warnings; tag fragmentation is handled in the reasoning parser only).
+Does **not** patch `qwen3xml_tool_parser.py` (experimental slices caused hangs or log
+spam; tag fragmentation is handled in the reasoning parser only).
 
 ## Files
 
@@ -64,10 +64,12 @@ import. Re-run the apply script (idempotent) or rebuild the image:
 python3 /opt/patches/06-pr40783-qwen3-reasoning/apply_pr40783_patches.py
 ```
 
-**`not well-formed (invalid token)` in `qwen3xml_tool_parser.py`:** v0.19.0 feeds JSON
-parameter bodies through expat and splits on `<` inside values. Re-run the apply script
-(it applies `DGX_SPARK_QWEN3XML_PARAM_BODY` and reverts the old #40861 slice); restart
-the container afterward.
+**API hangs on tool-calling requests:** An early `DGX_SPARK_QWEN3XML_PARAM_BODY` patch
+could spin forever in the XML parser (empty element at `</parameter>`). Re-run the
+apply script to revert it, then restart the container.
+
+**`not well-formed (invalid token)` warnings:** Benign on stock v0.19.0 during
+streaming; ignore unless `tool_calls` are wrong or missing.
 
 ## TODO (post–multi-model review)
 
@@ -77,6 +79,6 @@ Validate on DGX with a real agentic workload before further code changes.
 - [ ] Smoke test: streaming + `tool_choice=auto` + `enable_thinking=true`, multi-tool prompt — confirm structured `tool_calls` (not raw XML in `content` only)
 - [ ] Run `bench_qwen35.sh` — expect ±2% vs pre-patch baseline
 - [ ] If `tool_calls` empty but XML appears in stream: add text-based reasoning-end in `apply_serving()` (align with `just_completed_tool_call_tag` in parser)
-- [x] Drop minimal qwen3xml #40861 slice (reverted — caused XML parse warnings)
-- [ ] Full #40861 port when on v0.20+ if still needed after reasoning-only fix
+- [x] Drop qwen3xml patches (#40861 slice + param-body fix — hang or log spam)
+- [ ] Full qwen3xml fix when on v0.20+ (PR #40915 state machine) if warnings matter
 - [ ] Only after smoke passes: consider patching `tool_choice=required` / named-function serving branches; add real streaming unit tests (multi-delta tag, buffer desync)

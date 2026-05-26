@@ -276,21 +276,59 @@ def revert_qwen3xml_partial_tag() -> None:
     print(f"OK: reverted qwen3xml partial-tag patch in {path}")
 
 
-def apply_qwen3xml_param_body_fix() -> None:
-    """Stop feeding JSON parameter bodies (and '<' in values) to expat.
+def revert_qwen3xml_param_body_fix() -> None:
+    """Remove param-body patch — caused infinite loop when buffer starts with </parameter>.
 
-    v0.19.0 _should_skip_element returns False for any text while a tool call is
-    active, so _find_next_complete_element splits on '<' inside JSON and expat
-    logs 'not well-formed (invalid token)'. Route parameter body to _pre_param_buffer.
+    Leaves qwen3xml at stock v0.19.0 behavior (XML warnings possible, but no API hang).
     """
     path = TARGETS["qwen3xml"]
     content = _read(path)
-    if MARKER_PARAM_BODY in content:
-        print(f"SKIP: qwen3xml param-body fix already applied in {path}")
+    if MARKER_PARAM_BODY not in content:
+        print(f"SKIP: no qwen3xml param-body patch to revert in {path}")
         return
 
-    helper_anchor = "    def _should_skip_element(self, element: str) -> bool:"
-    helper_method = f'''    def _is_tool_xml_element(self, element: str) -> bool:
+    loop_block = f"""            # {MARKER_PARAM_BODY}: parameter JSON must not go through expat
+            if self.current_call_id is not None and not self._is_tool_xml_element(
+                element
+            ):
+                if self._pre_inside_parameter or self.current_param_name:
+                    self._pre_param_buffer += element
+                    found_any = True
+                self.last_processed_pos = end_pos
+                continue
+
+            """
+    loop_anchor = """            if self._should_skip_element(element):
+                self.last_processed_pos = end_pos
+                continue
+
+            # Found complete XML element, process it"""
+    if loop_block in content:
+        content = content.replace(loop_block, "", 1)
+    elif loop_block.replace("                continue\n\n", "                continue\n") in content:
+        content = content.replace(
+            loop_block.replace("                continue\n\n", "                continue\n"),
+            "",
+            1,
+        )
+    else:
+        print(f"FAIL: {MARKER_PARAM_BODY} loop block not found in {path}")
+        sys.exit(1)
+
+    find_block = f"""        # {MARKER_PARAM_BODY}: do not treat '<' inside parameter values as new tags
+        if self._pre_inside_parameter:
+            close_pos = buffer.find(self.parameter_end_token)
+            if close_pos != -1:
+                return buffer[:close_pos], start_pos + close_pos
+            return None, start_pos
+
+"""
+    if find_block not in content:
+        print(f"FAIL: {MARKER_PARAM_BODY} find block not found in {path}")
+        sys.exit(1)
+    content = content.replace(find_block, "", 1)
+
+    helper_block = f'''    def _is_tool_xml_element(self, element: str) -> bool:
         """{MARKER_PARAM_BODY}: tag fragment vs parameter JSON/plain body."""
         if not element:
             return False
@@ -307,63 +345,16 @@ def apply_qwen3xml_param_body_fix() -> None:
         )
         return any(stripped.startswith(p) for p in prefixes)
 
-    def _should_skip_element(self, element: str) -> bool:'''
-    if helper_anchor not in content:
-        print(f"FAIL: _should_skip_element anchor not found in {path}")
+    '''
+    helper_anchor = "    def _should_skip_element(self, element: str) -> bool:"
+    if helper_block + helper_anchor in content:
+        content = content.replace(helper_block + helper_anchor, helper_anchor, 1)
+    else:
+        print(f"FAIL: {MARKER_PARAM_BODY} helper not found in {path}")
         sys.exit(1)
-    content = content.replace(helper_anchor, helper_method, 1)
-
-    loop_anchor = """            if self._should_skip_element(element):
-                self.last_processed_pos = end_pos
-                continue
-
-            # Found complete XML element, process it"""
-    loop_replacement = f"""            if self._should_skip_element(element):
-                self.last_processed_pos = end_pos
-                continue
-
-            # {MARKER_PARAM_BODY}: parameter JSON must not go through expat
-            if self.current_call_id is not None and not self._is_tool_xml_element(
-                element
-            ):
-                if self._pre_inside_parameter or self.current_param_name:
-                    self._pre_param_buffer += element
-                    found_any = True
-                self.last_processed_pos = end_pos
-                continue
-
-            # Found complete XML element, process it"""
-    if loop_anchor not in content:
-        print(f"FAIL: _process_complete_xml_elements loop anchor not found in {path}")
-        sys.exit(1)
-    content = content.replace(loop_anchor, loop_replacement, 1)
-
-    find_anchor = """        buffer = self.streaming_buffer[start_pos:]
-
-        if not buffer:
-            return None, start_pos
-
-        if buffer.startswith("<"):"""
-    find_replacement = f"""        buffer = self.streaming_buffer[start_pos:]
-
-        if not buffer:
-            return None, start_pos
-
-        # {MARKER_PARAM_BODY}: do not treat '<' inside parameter values as new tags
-        if self._pre_inside_parameter:
-            close_pos = buffer.find(self.parameter_end_token)
-            if close_pos != -1:
-                return buffer[:close_pos], start_pos + close_pos
-            return None, start_pos
-
-        if buffer.startswith("<"):"""
-    if find_anchor not in content:
-        print(f"FAIL: _find_next_complete_element anchor not found in {path}")
-        sys.exit(1)
-    content = content.replace(find_anchor, find_replacement, 1)
 
     _write(path, content)
-    print(f"OK: patched {path} ({MARKER_PARAM_BODY})")
+    print(f"OK: reverted qwen3xml param-body patch in {path}")
 
 
 def main() -> None:
@@ -376,7 +367,7 @@ def main() -> None:
     apply_partial_tag_overlap()
     apply_serving()
     revert_qwen3xml_partial_tag()
-    apply_qwen3xml_param_body_fix()
+    revert_qwen3xml_param_body_fix()
     print(f"OK: all {MARKER} patches applied")
 
 
